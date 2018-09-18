@@ -5,7 +5,7 @@ use std::io::Write;
 use crate::svd::Device;
 
 use crate::errors::*;
-use crate::util::{self, ToSanitizedUpperCase};
+use crate::util::{self, ToSanitizedUpperCase, ToSanitizedSnakeCase};
 use crate::Target;
 
 use crate::generate::{interrupt, peripheral};
@@ -175,13 +175,18 @@ pub fn render(
             continue;
         }
 
-        let p = p.name.to_sanitized_upper_case();
-        let id = Ident::new(&p, Span::call_site());
+        let upper_name = p.name.to_sanitized_upper_case();
+        let snake_name = p.name.to_sanitized_snake_case();
+        let id = Ident::new(&*upper_name, Span::call_site());
         fields.push(quote! {
-            #[doc = #p]
+            #[doc = #upper_name]
+            #[cfg(feature = #snake_name)]
             pub #id: #id
         });
-        exprs.push(quote!(#id: #id { _marker: PhantomData }));
+        exprs.push(quote!{
+            #[cfg(feature = #snake_name)]
+            #id: #id { _marker: PhantomData }
+        });
     }
 
     let span = Span::call_site();

@@ -48,13 +48,18 @@ pub fn render(
         name_sc.clone()
     };
 
+    let snake_name = p.name.to_sanitized_snake_case();
+
     // Insert the peripheral structure
     out.push(quote! {
         #[doc = #description]
+        #[cfg(feature = #snake_name)]
         pub struct #name_pc { _marker: PhantomData<*const ()> }
 
+        #[cfg(feature = #snake_name)]
         unsafe impl Send for #name_pc {}
 
+        #[cfg(feature = #snake_name)]
         impl #name_pc {
             ///Returns a pointer to the register block
             #[inline(always)]
@@ -63,6 +68,7 @@ pub fn render(
             }
         }
 
+        #[cfg(feature = #snake_name)]
         impl Deref for #name_pc {
             type Target = #base::RegisterBlock;
 
@@ -182,6 +188,7 @@ pub fn render(
 
     out.push(quote! {
         #[doc = #description]
+        #[cfg(feature = #snake_name)]
         pub mod #name_sc #open
     });
 
