@@ -438,6 +438,7 @@ extern crate error_chain;
 #[macro_use]
 extern crate quote;
 use svd_parser as svd;
+use generate::device::RenderOutput;
 
 mod errors;
 mod generate;
@@ -474,7 +475,7 @@ pub fn generate(xml: &str, target: Target, nightly: bool) -> Result<Generation> 
 
     let device = svd::parse(xml).unwrap(); //TODO(AJM)
     let mut device_x = String::new();
-    let items = generate::device::render(&device, target, nightly, false, &mut device_x)
+    let RenderOutput { tokens, .. } = generate::device::render(&device, target, nightly, false, &mut device_x)
         .or(Err(SvdError::Render))?;
 
     let mut lib_rs = String::new();
@@ -482,7 +483,7 @@ pub fn generate(xml: &str, target: Target, nightly: bool) -> Result<Generation> 
         &mut lib_rs,
         "{}",
         quote! {
-            #(#items)*
+            #(#tokens)*
         }
     )
     .or(Err(SvdError::Fmt))?;

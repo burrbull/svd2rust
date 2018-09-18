@@ -16,7 +16,7 @@ test_svd() {
 
     popd
 
-    cargo check --manifest-path $td/Cargo.toml
+    cargo check --all-features --manifest-path $td/Cargo.toml
 }
 
 test_svd_for_target() {
@@ -50,7 +50,7 @@ main() {
         return
     fi
 
-    cargo build --target $TARGET --release
+    cargo build --all-features --target $TARGET --release
 
     case $TRAVIS_OS_NAME in
         linux)

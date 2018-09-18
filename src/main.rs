@@ -8,6 +8,9 @@ extern crate log;
 extern crate quote;
 use svd_parser as svd;
 
+#[cfg(feature = "cargo-setup")]
+extern crate toml;
+
 mod errors;
 mod generate;
 mod util;
@@ -18,8 +21,9 @@ use std::process;
 
 use clap::{App, Arg};
 
-use crate::errors::*;
+use errors::*;
 use crate::util::{build_rs, Target};
+use generate::device::RenderOutput;
 
 fn run() -> Result<()> {
     use std::io::Read;
@@ -32,15 +36,13 @@ fn run() -> Result<()> {
                 .short("i")
                 .takes_value(true)
                 .value_name("FILE"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("target")
                 .long("target")
                 .help("Target architecture")
                 .takes_value(true)
                 .value_name("ARCH"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("nightly_features")
                 .long("nightly")
                 .help("Enable features only available to nightly rustc"),
@@ -65,8 +67,7 @@ fn run() -> Result<()> {
         .version(concat!(
             env!("CARGO_PKG_VERSION"),
             include_str!(concat!(env!("OUT_DIR"), "/commit-info.txt"))
-        ))
-        .get_matches();
+        )).get_matches();
 
     setup_logging(&matches);
 
@@ -99,10 +100,11 @@ fn run() -> Result<()> {
     let generic_mod = matches.is_present("generic_mod");
 
     let mut device_x = String::new();
-    let items = generate::device::render(&device, target, nightly, generic_mod, &mut device_x)?;
+    let RenderOutput { tokens, .. } =
+        generate::device::render(&device, target, nightly, generic_mod, &mut device_x)?;
     let mut file = File::create("lib.rs").expect("Couldn't create lib.rs file");
 
-    for item in items {
+    for item in tokens {
         writeln!(file, "{}", item).expect("Could not write item to lib.rs");
     }
 
@@ -110,6 +112,14 @@ fn run() -> Result<()> {
         writeln!(File::create("device.x").unwrap(), "{}", device_x).unwrap();
         writeln!(File::create("build.rs").unwrap(), "{}", build_rs()).unwrap();
     }
+
+    // Only generate `Cargo.toml` when feature was selected
+    #[cfg(feature = "cargo-setup")]
+    writeln!(
+        File::create("build.rs").unwrap(),
+        "{}",
+        generate::cargo::generate_skeleton(features)
+    ).unwrap();
 
     Ok(())
 }

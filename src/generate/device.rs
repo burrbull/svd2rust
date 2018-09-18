@@ -5,10 +5,16 @@ use std::io::Write;
 use crate::svd::Device;
 
 use crate::errors::*;
-use crate::util::{self, ToSanitizedUpperCase, ToSanitizedSnakeCase};
+use crate::util::{self, ToSanitizedSnakeCase, ToSanitizedUpperCase};
 use crate::Target;
 
 use crate::generate::{interrupt, peripheral};
+
+/// A collection of Tokens and available feature flags
+pub struct RenderOutput {
+    pub tokens: Vec<TokenStream>,
+    pub features: Vec<String>,
+}
 
 /// Whole device generation
 pub fn render(
@@ -17,8 +23,11 @@ pub fn render(
     nightly: bool,
     generic_mod: bool,
     device_x: &mut String,
-) -> Result<Vec<TokenStream>> {
-    let mut out = vec![];
+) -> Result<RenderOutput> {
+    let mut output = RenderOutput {
+        tokens: vec![],
+        features: vec![],
+    };
 
     let doc = format!(
         "Peripheral access API for {0} microcontrollers \
@@ -30,20 +39,20 @@ pub fn render(
     );
 
     if target == Target::Msp430 {
-        out.push(quote! {
+        output.tokens.push(quote! {
             #![feature(abi_msp430_interrupt)]
         });
     }
 
     if target != Target::None && target != Target::CortexM && target != Target::RISCV {
-        out.push(quote! {
+        output.tokens.push(quote! {
             #![cfg_attr(feature = "rt", feature(global_asm))]
             #![cfg_attr(feature = "rt", feature(use_extern_macros))]
             #![cfg_attr(feature = "rt", feature(used))]
         });
     }
 
-    out.push(quote! {
+    output.tokens.push(quote! {
         #![doc = #doc]
         #![deny(missing_docs)]
         #![deny(warnings)]
@@ -53,14 +62,14 @@ pub fn render(
 
     match target {
         Target::CortexM => {
-            out.push(quote! {
+            output.tokens.push(quote! {
                 extern crate cortex_m;
                 #[cfg(feature = "rt")]
                 extern crate cortex_m_rt;
             });
         }
         Target::Msp430 => {
-            out.push(quote! {
+            output.tokens.push(quote! {
                 extern crate msp430;
                 #[cfg(feature = "rt")]
                 extern crate msp430_rt;
@@ -69,7 +78,7 @@ pub fn render(
             });
         }
         Target::RISCV => {
-            out.push(quote! {
+            output.tokens.push(quote! {
                 extern crate riscv;
                 #[cfg(feature = "rt")]
                 extern crate riscv_rt;
@@ -78,7 +87,7 @@ pub fn render(
         Target::None => {}
     }
 
-    out.push(quote! {
+    output.tokens.push(quote! {
         extern crate bare_metal;
         extern crate vcell;
 
@@ -92,7 +101,7 @@ pub fn render(
     if let Some(cpu) = d.cpu.as_ref() {
         let bits = util::unsuffixed(u64::from(cpu.nvic_priority_bits));
 
-        out.push(quote! {
+        output.tokens.push(quote! {
             ///Number available in the NVIC for configuring priority
             pub const NVIC_PRIO_BITS: u8 = #bits;
         });
@@ -100,7 +109,9 @@ pub fn render(
         fpu_present = cpu.fpu_present;
     }
 
-    out.extend(interrupt::render(target, &d.peripherals, device_x)?);
+    output
+        .tokens
+        .extend(interrupt::render(target, &d.peripherals, device_x)?);
 
     let core_peripherals: &[_] = if fpu_present {
         &[
@@ -116,7 +127,7 @@ pub fn render(
     let mut fields = vec![];
     let mut exprs = vec![];
     if target == Target::CortexM {
-        out.push(quote! {
+        output.tokens.push(quote! {
             pub use cortex_m::peripheral::Peripherals as CorePeripherals;
             #[cfg(feature = "rt")]
             pub use cortex_m_rt::interrupt;
@@ -125,13 +136,13 @@ pub fn render(
         });
 
         if fpu_present {
-            out.push(quote! {
+            output.tokens.push(quote! {
                 pub use cortex_m::peripheral::{
                     CBP, CPUID, DCB, DWT, FPB, FPU, ITM, MPU, NVIC, SCB, SYST, TPIU,
                 };
             });
         } else {
-            out.push(quote! {
+            output.tokens.push(quote! {
                 pub use cortex_m::peripheral::{
                     CBP, CPUID, DCB, DWT, FPB, ITM, MPU, NVIC, SCB, SYST, TPIU,
                 };
@@ -161,7 +172,9 @@ pub fn render(
             continue;
         }
 
-        out.extend(peripheral::render(p, &d.peripherals, &d.defaults, nightly)?);
+        output
+            .tokens
+            .extend(peripheral::render(p, &d.peripherals, &d.defaults, nightly)?);
 
         if p.registers
             .as_ref()
@@ -177,6 +190,7 @@ pub fn render(
 
         let upper_name = p.name.to_sanitized_upper_case();
         let snake_name = p.name.to_sanitized_snake_case();
+        output.features.push(String::from(snake_name.clone()));
         let id = Ident::new(&*upper_name, Span::call_site());
         fields.push(quote! {
             #[doc = #upper_name]
@@ -212,7 +226,7 @@ pub fn render(
         }
     });
 
-    out.push(quote! {
+    output.tokens.push(quote! {
         // NOTE `no_mangle` is used here to prevent linking different minor versions of the device
         // crate as that would let you `take` the device peripherals more than once (one per minor
         // version)
@@ -239,5 +253,5 @@ pub fn render(
         }
     });
 
-    Ok(out)
+    Ok(output)
 }
