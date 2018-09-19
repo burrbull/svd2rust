@@ -100,7 +100,7 @@ fn run() -> Result<()> {
     let generic_mod = matches.is_present("generic_mod");
 
     let mut device_x = String::new();
-    let RenderOutput { tokens, .. } =
+    let RenderOutput { tokens, features: _features } =
         generate::device::render(&device, target, nightly, generic_mod, &mut device_x)?;
     let mut file = File::create("lib.rs").expect("Couldn't create lib.rs file");
 
@@ -116,9 +116,9 @@ fn run() -> Result<()> {
     // Only generate `Cargo.toml` when feature was selected
     #[cfg(feature = "cargo-setup")]
     writeln!(
-        File::create("build.rs").unwrap(),
+        File::create("CargoFeatures.toml").unwrap(),
         "{}",
-        generate::cargo::generate_skeleton(features)
+        generate::cargo::generate_skeleton(_features)
     ).unwrap();
 
     Ok(())
