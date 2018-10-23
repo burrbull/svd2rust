@@ -14,12 +14,19 @@ test_svd() {
 
     mv lib.rs src/lib.rs
 
+    # Save off "clean" Cargo toml
+    mv $td/Cargo.toml $td/Cargo.toml.bkp
+
     # include Cargo features into test toml
+    cat $td/Cargo.toml.bkp > $td/Cargo.toml
     cat CargoFeatures.toml >> $td/Cargo.toml
 
     popd
 
     cargo check --all-features --manifest-path $td/Cargo.toml
+
+    # Restore pre-feature'd Cargo toml
+    mv $td/Cargo.toml.bkp $td/Cargo.toml
 }
 
 test_svd_for_target() {
