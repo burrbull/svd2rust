@@ -19,6 +19,7 @@ pub fn render(
     all_peripherals: &[Peripheral],
     defaults: &Defaults,
     nightly: bool,
+    conditional: bool,
 ) -> Result<Vec<TokenStream>> {
     let mut out = vec![];
 
@@ -51,15 +52,21 @@ pub fn render(
     let snake_name = p.name.to_sanitized_snake_case();
 
     // Insert the peripheral structure
+    // Should we allow for conditional compilation of each peripheral?
+    let gate = if conditional {
+        Some(quote!(#[cfg(feature = #snake_name)]))
+    } else {
+        None
+    };
     out.push(quote! {
         #[doc = #description]
-        #[cfg(feature = #snake_name)]
+        #gate
         pub struct #name_pc { _marker: PhantomData<*const ()> }
 
-        #[cfg(feature = #snake_name)]
+        #gate
         unsafe impl Send for #name_pc {}
 
-        #[cfg(feature = #snake_name)]
+        #gate
         impl #name_pc {
             ///Returns a pointer to the register block
             #[inline(always)]
@@ -68,7 +75,7 @@ pub fn render(
             }
         }
 
-        #[cfg(feature = #snake_name)]
+        #gate
         impl Deref for #name_pc {
             type Target = #base::RegisterBlock;
 
@@ -188,7 +195,7 @@ pub fn render(
 
     out.push(quote! {
         #[doc = #description]
-        #[cfg(feature = #snake_name)]
+        #gate
         pub mod #name_sc #open
     });
 

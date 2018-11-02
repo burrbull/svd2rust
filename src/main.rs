@@ -8,7 +8,6 @@ extern crate log;
 extern crate quote;
 use svd_parser as svd;
 
-#[cfg(feature = "cargo-setup")]
 extern crate toml;
 
 mod errors;
@@ -64,7 +63,12 @@ fn run() -> Result<()> {
                 .takes_value(true)
                 .possible_values(&["off", "error", "warn", "info", "debug", "trace"]),
         )
-        .version(concat!(
+        .arg(
+            Arg::with_name("conditional_peripherals")
+                .long("cond-periphs")
+                .short("p")
+                .help("Wrap each generated peripheral in a conditional feature"),
+        ).version(concat!(
             env!("CARGO_PKG_VERSION"),
             include_str!(concat!(env!("OUT_DIR"), "/commit-info.txt"))
         )).get_matches();
@@ -96,12 +100,14 @@ fn run() -> Result<()> {
     let device = svd::parse(xml).unwrap(); //TODO(AJM)
 
     let nightly = matches.is_present("nightly_features");
+    let conditional = matches.is_present("conditional_peripherals");
 
     let generic_mod = matches.is_present("generic_mod");
 
     let mut device_x = String::new();
+
     let RenderOutput { tokens, features: _features } =
-        generate::device::render(&device, target, nightly, generic_mod, &mut device_x)?;
+        generate::device::render(&device, target, nightly, generic_mod, conditional, &mut device_x)?;
     let mut file = File::create("lib.rs").expect("Couldn't create lib.rs file");
 
     for item in tokens {
@@ -114,12 +120,13 @@ fn run() -> Result<()> {
     }
 
     // Only generate `Cargo.toml` when feature was selected
-    #[cfg(feature = "cargo-setup")]
-    writeln!(
-        File::create("CargoFeatures.toml").unwrap(),
-        "{}",
-        generate::cargo::generate_skeleton(_features)
-    ).unwrap();
+    if conditional {
+        writeln!(
+            File::create("CargoFeatures.toml").unwrap(),
+            "{}",
+            generate::cargo::generate_skeleton(_features)
+        ).unwrap();
+    }
 
     Ok(())
 }

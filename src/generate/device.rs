@@ -22,6 +22,7 @@ pub fn render(
     target: Target,
     nightly: bool,
     generic_mod: bool,
+    conditional: bool,
     device_x: &mut String,
 ) -> Result<RenderOutput> {
     let mut output = RenderOutput {
@@ -87,11 +88,20 @@ pub fn render(
         Target::None => {}
     }
 
+    // If conditionals are used, and NO peripherals are selected,
+    // certain imports may be unused
+    let maybe_unused = if conditional {
+        Some(quote!(#[allow(unused_imports)]))
+    } else {
+        None
+    };
     output.tokens.push(quote! {
         extern crate bare_metal;
         extern crate vcell;
 
+        #maybe_unused
         use core::ops::Deref;
+        #maybe_unused
         use core::marker::PhantomData;
     });
 
@@ -156,7 +166,7 @@ pub fn render(
     } else {
         let tokens = syn::parse_file(generic_file).unwrap().into_token_stream();
 
-        out.push(quote! {
+        output.tokens.push(quote! {
             #[allow(unused_imports)]
             use generic::*;
             ///Common register and bit access and modify traits
@@ -174,7 +184,7 @@ pub fn render(
 
         output
             .tokens
-            .extend(peripheral::render(p, &d.peripherals, &d.defaults, nightly)?);
+            .extend(peripheral::render(p, &d.peripherals, &d.defaults, nightly, conditional)?);
 
         if p.registers
             .as_ref()
@@ -192,13 +202,20 @@ pub fn render(
         let snake_name = p.name.to_sanitized_snake_case();
         output.features.push(String::from(snake_name.clone()));
         let id = Ident::new(&*upper_name, Span::call_site());
+
+        // Should we allow for conditional compilation of each peripheral?
+        let gate = if conditional {
+            Some(quote!(#[cfg(feature = #snake_name)]))
+        } else {
+            None
+        };
         fields.push(quote! {
             #[doc = #upper_name]
-            #[cfg(feature = #snake_name)]
+            #gate
             pub #id: #id
         });
         exprs.push(quote!{
-            #[cfg(feature = #snake_name)]
+            #gate
             #id: #id { _marker: PhantomData }
         });
     }
