@@ -134,7 +134,7 @@ pub fn render(
                 all_registers,
                 peripheral,
                 all_peripherals,
-                rsize,
+                &rty,
                 access,
                 &mut mod_items,
                 &mut r_impl_items,
@@ -153,6 +153,15 @@ pub fn render(
 
     if write_access {
         mod_items.push(quote! {
+            /// Wiggle in the specified value into the given bits with mask and the offset and return the new value
+            #[inline]
+            pub const fn set_bits(bits: #rty, mask: #rty, offset: u8, value: #rty) -> #rty {
+                let mut bits = bits;
+                bits &= !(mask << offset);
+                bits |= (value & mask) << offset;
+                bits
+            }
+
             impl W {
                 #(#w_impl_items)*
             }
@@ -187,14 +196,12 @@ pub fn fields(
     all_registers: &[&Register],
     peripheral: &Peripheral,
     all_peripherals: &[Peripheral],
-    rsize: u32,
+    rty: &Ident,
     access: Access,
     mod_items: &mut Vec<Tokens>,
     r_impl_items: &mut Vec<Tokens>,
     w_impl_items: &mut Vec<Tokens>,
 ) -> Result<()> {
-    let rty = rsize.to_ty()?;
-
     struct F<'a> {
         _pc_w: Ident,
         _sc: Ident,
@@ -747,18 +754,11 @@ pub fn fields(
                 }
             }
 
-            let set_bits = match rsize {
-                8 => Some(Ident::new("set_bits_u8")),
-                16 => Some(Ident::new("set_bits_u16")),
-                32 => Some(Ident::new("set_bits_u32")),
-                64 => Some(Ident::new("set_bits_u64")),
-                _ => unreachable!(),
-            };
             if width == 1 {
                 bit_items.push(quote! {
                     #[inline]
-                    fn bit(self, value: #fty) -> &'a mut W {
-                        self.w.bits = vcell::#set_bits (self.w.bits, #mask as #rty, #offset, value as #rty);
+                    fn bit(self, value: bool) -> &'a mut W {
+                        self.w.bits = set_bits(self.w.bits, #mask as #rty, #offset, value as #rty);
                         self.w
                     }
                 });
@@ -767,7 +767,7 @@ pub fn fields(
                     /// Writes raw bits to the field
                     #[inline]
                     pub #unsafety fn #bits(self, value: #fty) -> &'a mut W {
-                        self.w.bits = vcell::#set_bits (self.w.bits, #mask as #rty, #offset, value as #rty);
+                        self.w.bits = set_bits(self.w.bits, #mask as #rty, #offset, value as #rty);
                         self.w
                     }
                 });
