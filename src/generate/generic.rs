@@ -10,21 +10,45 @@ pub trait Readable {}
 ///Registers marked with `Readable` can be also `modify`'ed
 pub trait Writable {}
 
+///Shows memory size of register/field
+pub trait SizeType {
+    ///Register or field unsigned size type
+    type Type;
+}
+
+impl SizeType for bool {
+    type Type = bool;
+}
+
+impl SizeType for u8 {
+    type Type = u8;
+}
+
+impl SizeType for u16 {
+    type Type = u16;
+}
+
+impl SizeType for u32 {
+    type Type = u32;
+}
+
+impl SizeType for u64 {
+    type Type = u64;
+}
+
 ///Reset value of the register
 ///
 ///This value is initial value for `write` method.
 ///It can be also directly writed to register by `reset` method.
-pub trait ResetValue {
-    ///Register size
-    type Type;
+pub trait ResetValue: SizeType {
     ///Reset value of the register
-    fn reset_value() -> Self::Type;
+    const RESET_VALUE: Self::Type;
 }
 
 ///Converting enumerated values to bits
-pub trait ToBits<N> {
+pub trait ToBits: SizeType {
     ///Conversion method
-    fn _bits(&self) -> N;
+    fn to_bits(&self) -> Self::Type;
 }
 
 ///This structure provides volatile access to register
@@ -35,6 +59,10 @@ pub struct Reg<U, REG> {
 
 unsafe impl<U: Send, REG> Send for Reg<U, REG> { }
 
+impl<U, REG> crate::SizeType for Reg<U, REG> {
+    type Type = U;
+}
+
 impl<U, REG> Reg<U, REG>
 where
     Self: Readable,
@@ -44,8 +72,8 @@ where
     ///
     ///See [reading](https://rust-embedded.github.io/book/start/registers.html#reading) in book.
     #[inline(always)]
-    pub fn read(&self) -> R<U, Self> {
-        R {bits: self.register.get(), _reg: marker::PhantomData}
+    pub fn read(&self) -> R<Self> {
+        R {bits: self.register.get()}
     }
 }
 
@@ -57,7 +85,7 @@ where
     ///Writes the reset value to `Writable` register
     #[inline(always)]
     pub fn reset(&self) {
-        self.register.set(Self::reset_value())
+        self.register.set(Self::RESET_VALUE)
     }
 }
 
@@ -72,9 +100,9 @@ where
     #[inline(always)]
     pub fn write<F>(&self, f: F)
     where
-        F: FnOnce(&mut W<U, Self>) -> &mut W<U, Self>
+        F: FnOnce(&mut W<Self>) -> &mut W<Self>
     {
-        self.register.set(f(&mut W {bits: Self::reset_value(), _reg: marker::PhantomData}).bits);
+        self.register.set(f(&mut W {bits: Self::RESET_VALUE}).bits);
     }
 }
 
@@ -87,9 +115,9 @@ where
     #[inline(always)]
     pub fn write_with_zero<F>(&self, f: F)
     where
-        F: FnOnce(&mut W<U, Self>) -> &mut W<U, Self>
+        F: FnOnce(&mut W<Self>) -> &mut W<Self>
     {
-        self.register.set(f(&mut W {bits: U::default(), _reg: marker::PhantomData }).bits);
+        self.register.set(f(&mut W {bits: U::default()}).bits);
     }
 }
 
@@ -104,49 +132,46 @@ where
     #[inline(always)]
     pub fn modify<F>(&self, f: F)
     where
-        for<'w> F: FnOnce(&R<U, Self>, &'w mut W<U, Self>) -> &'w mut W<U, Self>
+        for<'w> F: FnOnce(&R<Self>, &'w mut W<Self>) -> &'w mut W<Self>
     {
         let bits = self.register.get();
-        self.register.set(f(&R {bits, _reg: marker::PhantomData}, &mut W {bits, _reg: marker::PhantomData}).bits);
+        self.register.set(f(&R {bits}, &mut W {bits}).bits);
     }
 }
 
 ///Register/field reader
-pub struct R<U, T> {
-    pub(crate) bits: U,
-    _reg: marker::PhantomData<T>,
+pub struct R<T> where T: SizeType {
+    pub(crate) bits: T::Type,
 }
 
-impl<U, T> R<U, T>
+impl<T> R<T>
 where
-    U: Copy
+    T: SizeType,
+    T::Type: Copy
 {
-    ///Create new instance of reader
-    #[inline(always)]
-    pub(crate) fn new(bits: U) -> Self {
-        Self {
-            bits,
-            _reg: marker::PhantomData,
-        }
-    }
     ///Read raw bits from register/field
     #[inline(always)]
-    pub fn bits(&self) -> U {
+    pub fn bits(&self) -> T::Type {
         self.bits
     }
 }
 
-impl<U, T, FI> PartialEq<FI> for R<U, T>
+impl<FI> PartialEq<FI> for R<FI>
 where
-    U: PartialEq,
-    FI: ToBits<U>
+    FI: SizeType + ToBits,
+    FI::Type: PartialEq,
 {
+    #[inline(always)]
     fn eq(&self, other: &FI) -> bool {
-        self.bits.eq(&other._bits())
+        self.bits.eq(&other.to_bits())
     }
 }
 
-impl<FI> R<bool, FI> {
+///Bit access methods for 1-bit wise field
+impl<FI> R<FI>
+where
+    FI: SizeType<Type=bool>
+{
     ///Value of the field as raw bits
     #[inline(always)]
     pub fn bit(&self) -> bool {
@@ -165,16 +190,18 @@ impl<FI> R<bool, FI> {
 }
 
 ///Register writer
-pub struct W<U, REG> {
+pub struct W<REG> where REG: SizeType {
     ///Writable bits
-    pub bits: U,
-    _reg: marker::PhantomData<REG>,
+    pub bits: REG::Type,
 }
 
-impl<U, REG> W<U, REG> {
+impl<REG> W<REG>
+where
+    REG: SizeType,
+{
     ///Writes raw bits to the register
     #[inline(always)]
-    pub fn bits(&mut self, bits: U) -> &mut Self {
+    pub unsafe fn bits(&mut self, bits: REG::Type) -> &mut Self {
         self.bits = bits;
         self
     }
@@ -182,9 +209,12 @@ impl<U, REG> W<U, REG> {
 
 ///Used if enumerated values cover not the whole range
 #[derive(Clone,Copy,PartialEq)]
-pub enum Variant<U, T> {
+pub enum Variant<FI>
+where
+    FI: SizeType
+{
     ///Expected variant
-    Val(T),
+    Val(FI),
     ///Raw bits
-    Res(U),
+    Res(FI::Type),
 }

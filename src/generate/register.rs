@@ -48,33 +48,34 @@ pub fn render(
         let desc = format!("Reader of register {}", register.name);
         mod_items.push(quote! {
             #[doc = #desc]
-            pub type R = crate::R<#rty, super::#name_pc>;
+            pub type R = crate::R<super::#name_pc>;
         });
         methods.push("read");
     }
 
     if can_write {
-        let rv = register
-            .reset_value
-            .or(defs.reset_value)
-            .map(|v| util::hex(v as u64))
-            .ok_or_else(|| format!("Register {} has no reset value", register.name))?;
-
         let desc = format!("Writer for register {}", register.name);
-        let doc = format!("Register {} `reset()`'s with value {}", register.name, &rv);
         mod_items.push(quote! {
             #[doc = #desc]
-            pub type W = crate::W<#rty, super::#name_pc>;
-            #[doc = #doc]
-            impl crate::ResetValue for super::#name_pc {
-                type Type = #rty;
-                #[inline(always)]
-                fn reset_value() -> Self::Type { #rv }
-            }
+            pub type W = crate::W<super::#name_pc>;
         });
-        methods.push("reset");
-        methods.push("write");
         methods.push("write_with_zero");
+
+        let res_val = register
+            .reset_value
+            .or(defs.reset_value)
+            .map(|v| util::hex(v as u64));
+        if let Some(rv) = res_val {
+            let doc = format!("Register {} `reset()`'s with value {}", register.name, &rv);
+            mod_items.push(quote! {
+                #[doc = #doc]
+                impl crate::ResetValue for super::#name_pc {
+                    const RESET_VALUE: Self::Type = #rv;
+                }
+            });
+            methods.push("reset");
+            methods.push("write");
+        }
     }
 
     if can_read && can_write {
@@ -313,7 +314,7 @@ pub fn fields(
                     #[doc = #description]
                     #[inline(always)]
                     pub fn #sc(&self) -> #_pc_r {
-                        #_pc_r::new( #value )
+                        #_pc_r { bits: #value }
                     }
                 });
 
@@ -325,7 +326,7 @@ pub fn fields(
                     let doc = format!("Reader of field `{}`", f.name);
                     mod_items.push(quote! {
                         #[doc = #doc]
-                        pub type #_pc_r = crate::R<#fty, #base_pc_r>;
+                        pub type #_pc_r = crate::R<#base_pc_r>;
                     });
 
                     base_pc_r
@@ -367,7 +368,7 @@ pub fn fields(
                         enum_items.push(quote! {
                             ///Get enumerated values variant
                             #[inline(always)]
-                            pub fn variant(&self) -> crate::Variant<#fty, #pc_r> {
+                            pub fn variant(&self) -> crate::Variant<#pc_r> {
                                 use crate::Variant::*;
                                 match self.bits {
                                     #(#arms),*
@@ -409,7 +410,7 @@ pub fn fields(
                     let doc = format!("Reader of field `{}`", f.name);
                     mod_items.push(quote! {
                         #[doc = #doc]
-                        pub type #_pc_r = crate::R<#fty, #pc_r>;
+                        pub type #_pc_r = crate::R<#pc_r>;
                         impl #_pc_r {
                             #(#enum_items)*
                         }
@@ -423,14 +424,14 @@ pub fn fields(
                     #[doc = #description]
                     #[inline(always)]
                     pub fn #sc(&self) -> #_pc_r {
-                        #_pc_r::new ( #value )
+                        #_pc_r { bits: #value }
                     }
                 });
 
                 let doc = format!("Reader of field `{}`", f.name);
                 mod_items.push(quote! {
                     #[doc = #doc]
-                    pub type #_pc_r = crate::R<#fty, #fty>;
+                    pub type #_pc_r = crate::R<#fty>;
                 })
 
             }
@@ -469,7 +470,7 @@ pub fn fields(
                     pub fn variant(self, variant: #pc_w) -> &'a mut W {
                         use crate::ToBits;
                         #unsafety {
-                            self.#bits(variant._bits())
+                            self.#bits(variant.to_bits())
                         }
                     }
                 });
@@ -649,9 +650,12 @@ fn add_from_variants(mod_items: &mut Vec<Tokens>, variants: &Vec<Variant>, pc: &
     });
 
     mod_items.push(quote! {
-        impl crate::ToBits<#fty> for #pc {
+        impl crate::SizeType for #pc {
+            type Type = #fty;
+        }
+        impl crate::ToBits for #pc {
             #[inline(always)]
-            fn _bits(&self) -> #fty {
+            fn to_bits(&self) -> #fty {
                 match *self {
                     #(#arms),*
                 }
