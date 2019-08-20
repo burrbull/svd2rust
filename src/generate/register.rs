@@ -16,11 +16,11 @@ pub fn render(
     all_peripherals: &[Peripheral],
     defs: &Defaults,
 ) -> Result<Vec<TokenStream>> {
+    let address = util::hex(register.address_offset as u64);
     let access = util::access_of(register);
     let name = util::name_of(register);
     let span = Span::call_site();
     let name_pc = Ident::new(&name.to_sanitized_upper_case(), span);
-    let _name_pc = Ident::new(&format!("_{}", &name.to_sanitized_upper_case()), span);
     let name_sc = Ident::new(&name.to_sanitized_snake_case(), span);
     let rsize = register
         .size
@@ -47,14 +47,43 @@ pub fn render(
     let mut w_impl_items = vec![];
     let mut methods = vec![];
 
+    mod_items.push(quote! {
+        #[allow(missing_docs)]
+        pub struct #name_pc;
+
+        impl crate::Size for #name_pc {
+            type Type = #rty;
+        }
+
+        impl crate::I2cAddress for #name_pc {
+            const ADDRESS: u16 = #address;
+        }
+    });
+
     let can_read = [Access::ReadOnly, Access::ReadWriteOnce, Access::ReadWrite].contains(&access);
     let can_write = access != Access::ReadOnly;
+
+
+    if can_read {
+        let doc = "`read()` method returns [R](R) reader structure";
+        mod_items.push(quote! {
+            #[doc = #doc]
+            impl crate::Readable for #name_pc {}
+        });
+    }
+    if can_write {
+        let doc = "`write(|w| ..)` method takes [W](W) writer structure";
+        mod_items.push(quote! {
+            #[doc = #doc]
+            impl crate::Writable for #name_pc {}
+        });
+    }
 
     if can_read {
         let desc = format!("Reader of register {}", register.name);
         mod_items.push(quote! {
             #[doc = #desc]
-            pub type R = crate::R<#rty, super::#name_pc>;
+            pub type R = crate::R<#rty, #name_pc>;
         });
         methods.push("read");
     }
@@ -67,14 +96,13 @@ pub fn render(
         let desc = format!("Writer for register {}", register.name);
         mod_items.push(quote! {
             #[doc = #desc]
-            pub type W = crate::W<#rty, super::#name_pc>;
+            pub type W = crate::W<#rty, #name_pc>;
         });
         if let Some(rv) = res_val.map(util::hex) {
             let doc = format!("Register {} `reset()`'s with value {}", register.name, &rv);
             mod_items.push(quote! {
                 #[doc = #doc]
-                impl crate::ResetValue for super::#name_pc {
-                    type Type = #rty;
+                impl crate::ResetValue for #name_pc {
                     #[inline(always)]
                     fn reset_value() -> Self::Type { #rv }
                 }
@@ -83,10 +111,6 @@ pub fn render(
             methods.push("write");
         }
         methods.push("write_with_zero");
-    }
-
-    if can_read && can_write {
-        methods.push("modify");
     }
 
     if let Some(cur_fields) = register.fields.as_ref() {
@@ -151,36 +175,18 @@ pub fn render(
     }
 
     let mut out = vec![];
-    let methods = methods.iter().map(|s| format!("[`{0}`](crate::generic::Reg::{0})", s)).collect::<Vec<_>>();
-    let mut doc = format!("{}\n\nThis register you can {}. See [API](https://docs.rs/svd2rust/#read--modify--write-api).",
-                        &description, methods.join(", "));
+    let methods = methods.iter().map(|s| format!("[`{0}`](crate::generic::I2cDevice::{0})", s)).collect::<Vec<_>>();
+    let mut doc = format!("{} - {}\n\nThis register you can {}. See [API](https://docs.rs/svd2rust/#read--modify--write-api).",
+                        address, &description, methods.join(", "));
 
     if name_sc != "cfg" {
         doc += format!("\n\nFor information about avaliable fields see [{0}]({0}) module", &name_sc).as_str();
     }
+
     out.push(quote! {
         #[doc = #doc]
-        pub type #name_pc = crate::Reg<#rty, #_name_pc>;
-
-        #[allow(missing_docs)]
-        #[doc(hidden)]
-        pub struct #_name_pc;
+        pub const #name_pc: #name_sc::#name_pc = #name_sc::#name_pc;
     });
-
-    if can_read {
-        let doc = format!("`read()` method returns [{0}::R]({0}::R) reader structure", &name_sc);
-        out.push(quote! {
-            #[doc = #doc]
-            impl crate::Readable for #name_pc {}
-        });
-    }
-    if can_write {
-        let doc = format!("`write(|w| ..)` method takes [{0}::W]({0}::W) writer structure", &name_sc);
-        out.push(quote! {
-            #[doc = #doc]
-            impl crate::Writable for #name_pc {}
-        });
-    }
 
     out.push(quote! {
         #[doc = #description]
