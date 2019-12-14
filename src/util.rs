@@ -195,6 +195,14 @@ pub fn name_of(register: &Register) -> Cow<str> {
     }
 }
 
+pub fn replace_suffix(name: &str, suffix: &str) -> String {
+    if name.contains("[%s]") {
+        name.replace("[%s]", suffix)
+    } else {
+        name.replace("%s", suffix)
+    }
+}
+
 pub fn access_of(register: &Register) -> Access {
     register.access.unwrap_or_else(|| {
         if let Some(fields) = &register.fields {

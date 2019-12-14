@@ -227,8 +227,9 @@ pub fn fields(
         fn from(f: &'a Field) -> Result<Self> {
             // TODO(AJM) - do we need to do anything with this range type?
             let BitRange { offset, width, .. } = f.bit_range;
-            let sc = f.name.to_sanitized_snake_case();
-            let pc = f.name.to_sanitized_upper_case();
+            let name = util::replace_suffix(&f.name, "");
+            let sc = name.to_sanitized_snake_case();
+            let pc = name.to_sanitized_upper_case();
             let span = Span::call_site();
             let pc_r = Ident::new(&format!("{}_A", pc), span);
             let _pc_r = Ident::new(&format!("{}_R", pc), span);
@@ -236,26 +237,43 @@ pub fn fields(
             let _pc_w = Ident::new(&format!("{}_W", pc), span);
             let _sc = Ident::new(&format!("_{}", sc), span);
             let bits = Ident::new(if width == 1 { "bit" } else { "bits" }, Span::call_site());
-            let mut description_with_bits = if width == 1 {
-                format!("Bit {}", offset)
-            } else {
-                format!("Bits {}:{}", offset, offset + width - 1)
-            };
-            if let Some(d) = &f.description {
-                description_with_bits.push_str(" - ");
-                description_with_bits.push_str(&util::respace(&util::escape_brackets(d)));
-            }
             let description = if let Some(d) = &f.description {
                 util::respace(&util::escape_brackets(d))
             } else {
                 "".to_owned()
             };
 
+            let dim = match f {
+                Field::Array(_, de) => {
+                    let (first, index) = if let Some(dim_index) = &de.dim_index {
+                        if let Ok(first) = dim_index[0].parse::<u32>() {
+                            let sequential_indexes = dim_index
+                                .iter()
+                                .map(|element| element.parse::<u32>())
+                                .eq((first..de.dim + first).map(Ok));
+                            if !sequential_indexes {
+                                return Err(format!("unsupported array indexes in {}", f.name))?;
+                            }
+                            (first, None)
+                        } else {
+                            (0, de.dim_index.clone())
+                        }
+                    } else {
+                        (0, None)
+                    };
+                    let suffixes: Vec<_> = match index {
+                        Some(ix) => ix,
+                        None => (0..de.dim).map(|i| (first + i).to_string()).collect(),
+                    };
+                    Some((first, de.dim, de.dim_increment, suffixes))
+                }
+                Field::Single(_) => None,
+            };
+
             Ok(F {
                 _pc_w,
                 _sc,
                 description,
-                description_with_bits,
                 pc_r,
                 _pc_r,
                 pc_w,
@@ -269,6 +287,7 @@ pub fn fields(
                 offset: u64::from(offset),
                 ty: width.to_ty()?,
                 write_constraint: f.write_constraint.as_ref(),
+                dim,
             })
         }
     }
@@ -307,10 +326,10 @@ pub fn fields(
         let _pc_r = &f._pc_r;
         let _pc_w = &f._pc_w;
         let description = &f.description;
-        let description_with_bits = &f.description_with_bits;
+        let width = f.width;
 
         if can_read {
-            let cast = if f.width == 1 {
+            let cast = if width == 1 {
                 quote! { != 0 }
             } else {
                 quote! { as #fty }
@@ -326,21 +345,68 @@ pub fn fields(
                 }
             };
 
-            if let Some((evs, base)) = lookup_filter(&lookup_results, Usage::Read) {
-                evs_r = Some(evs.clone());
-
-                let sc = &f.sc;
+            let sc = &f.sc;
+            if let Some((first, dim, increment, suffixes)) = f.dim.clone() {
+                let offset_calc = calculate_offset(first, increment, offset);
+                let value = quote! { ((self.bits >> #offset_calc) & #mask) #cast };
+                let doc = &f.description;
                 r_impl_items.push(quote! {
-                    #[doc = #description_with_bits]
+                    #[doc = #doc]
+                    #[inline(always)]
+                    pub unsafe fn #sc(&self, n: usize) -> #_pc_r {
+                        #_pc_r::new( #value )
+                    }
+                });
+                for (i, suffix) in (0..dim).zip(suffixes.iter()) {
+                    let offset = offset + (i as u64) * (increment as u64);
+                    let value = if offset != 0 {
+                        let offset = &util::unsuffixed(offset);
+                        quote! {
+                            ((self.bits >> #offset) & #mask) #cast
+                        }
+                    } else {
+                        quote! {
+                            (self.bits & #mask) #cast
+                        }
+                    };
+                    let sc_n = Ident::new(
+                        &util::replace_suffix(&f.name.to_sanitized_snake_case(), &suffix),
+                        Span::call_site(),
+                    );
+                    let doc = util::replace_suffix(
+                        &description_with_bits(&f.description, offset, width),
+                        &suffix,
+                    );
+                    r_impl_items.push(quote! {
+                        #[doc = #doc]
+                        #[inline(always)]
+                        pub fn #sc_n(&self) -> #_pc_r {
+                            #_pc_r::new( #value )
+                        }
+                    });
+                }
+            } else {
+                let doc = description_with_bits(&f.description, f.offset, width);
+                r_impl_items.push(quote! {
+                    #[doc = #doc]
                     #[inline(always)]
                     pub fn #sc(&self) -> #_pc_r {
                         #_pc_r::new( #value )
                     }
                 });
+            }
+
+            if let Some((evs, base)) = lookup_filter(&lookup_results, Usage::Read) {
+                evs_r = Some(evs.clone());
 
                 base_pc_w = base.as_ref().map(|base| {
-                    let pc = base.field.to_sanitized_upper_case();
-                    let base_pc_r = Ident::new(&format!("{}_A", pc), Span::call_site());
+                    let base_pc_r = Ident::new(
+                        &format!(
+                            "{}_A",
+                            util::replace_suffix(base.field, "").to_sanitized_upper_case()
+                        ),
+                        Span::call_site(),
+                    );
                     let base_pc_r =
                         derive_from_base(mod_items, &base, &pc_r, &base_pc_r, description);
 
@@ -354,7 +420,7 @@ pub fn fields(
                 });
 
                 if base.is_none() {
-                    let has_reserved_variant = evs.values.len() != (1 << f.width);
+                    let has_reserved_variant = evs.values.len() != (1 << width);
                     let variants = Variant::from_enumerated_values(evs)?;
 
                     add_from_variants(mod_items, &variants, pc_r, &f, description, rv);
@@ -364,7 +430,7 @@ pub fn fields(
                     let mut arms = variants
                         .iter()
                         .map(|v| {
-                            let i = util::unsuffixed_or_bool(v.value, f.width);
+                            let i = util::unsuffixed_or_bool(v.value, width);
                             let pc = &v.pc;
 
                             if has_reserved_variant {
@@ -379,7 +445,7 @@ pub fn fields(
                         arms.push(quote! {
                             i => Res(i)
                         });
-                    } else if 1 << f.width.to_ty_width()? != variants.len() {
+                    } else if 1 << width.to_ty_width()? != variants.len() {
                         arms.push(quote! {
                             _ => unreachable!()
                         });
@@ -441,15 +507,6 @@ pub fn fields(
                     });
                 }
             } else {
-                let sc = &f.sc;
-                r_impl_items.push(quote! {
-                    #[doc = #description_with_bits]
-                    #[inline(always)]
-                    pub fn #sc(&self) -> #_pc_r {
-                        #_pc_r::new ( #value )
-                    }
-                });
-
                 let doc = format!("Reader of field `{}`", f.name);
                 mod_items.push(quote! {
                     #[doc = #doc]
@@ -461,13 +518,12 @@ pub fn fields(
         if can_write {
             let mut proxy_items = vec![];
 
-            let mut unsafety = unsafety(f.write_constraint, f.width);
-            let width = f.width;
+            let mut unsafety = unsafety(f.write_constraint, width);
 
             if let Some((evs, base)) = lookup_filter(&lookup_results, Usage::Write) {
                 let variants = Variant::from_enumerated_values(evs)?;
 
-                if variants.len() == 1 << f.width {
+                if variants.len() == 1 << width {
                     unsafety = None;
                 }
 
@@ -475,8 +531,13 @@ pub fn fields(
                     pc_w = &f.pc_w;
 
                     base_pc_w = base.as_ref().map(|base| {
-                        let pc = base.field.to_sanitized_upper_case();
-                        let base_pc_w = Ident::new(&format!("{}_AW", pc), Span::call_site());
+                        let base_pc_w = Ident::new(
+                            &format!(
+                                "{}_AW",
+                                util::replace_suffix(base.field, "").to_sanitized_upper_case()
+                            ),
+                            Span::call_site(),
+                        );
                         derive_from_base(mod_items, &base, &pc_w, &base_pc_w, description)
                     });
 
@@ -536,7 +597,16 @@ pub fn fields(
                 });
             }
 
-            proxy_items.push(if offset != 0 {
+            proxy_items.push(if f.dim.is_some() {
+                quote! {
+                    ///Writes raw bits to the field
+                    #[inline(always)]
+                    pub #unsafety fn #bits(self, value: #fty) -> &'a mut W {
+                        self.w.bits = (self.w.bits & !(#mask << self.o)) | (((value as #rty) & #mask) << self.o);
+                        self.w
+                    }
+                }
+            } else if offset != 0 {
                 let offset = &util::unsuffixed(offset);
                 quote! {
                     ///Writes raw bits to the field
@@ -557,11 +627,18 @@ pub fn fields(
                 }
             });
 
+            let o_entry = if f.dim.is_some() {
+                quote! {o: usize,}
+            } else {
+                quote! {}
+            };
+
             let doc = format!("Write proxy for field `{}`", f.name);
             mod_items.push(quote! {
                 #[doc = #doc]
                 pub struct #_pc_w<'a> {
                     w: &'a mut W,
+                    #o_entry
                 }
 
                 impl<'a> #_pc_w<'a> {
@@ -570,13 +647,45 @@ pub fn fields(
             });
 
             let sc = &f.sc;
-            w_impl_items.push(quote! {
-                #[doc = #description_with_bits]
-                #[inline(always)]
-                pub fn #sc(&mut self) -> #_pc_w {
-                    #_pc_w { w: self }
+            if let Some((first, dim, increment, suffixes)) = f.dim.clone() {
+                let offset_calc = calculate_offset(first, increment, offset);
+                let doc = &f.description;
+                w_impl_items.push(quote! {
+                    #[doc = #doc]
+                    #[inline(always)]
+                    pub unsafe fn #sc(&mut self, n: usize) -> #_pc_w {
+                        #_pc_w { w: self, o: #offset_calc }
+                    }
+                });
+                for (i, suffix) in (0..dim).zip(suffixes.iter()) {
+                    let offset = offset + (i as u64) * (increment as u64);
+                    let sc_n = Ident::new(
+                        &util::replace_suffix(&f.name.to_sanitized_snake_case(), &suffix),
+                        Span::call_site(),
+                    );
+                    let doc = util::replace_suffix(
+                        &description_with_bits(&f.description, offset, width),
+                        &suffix,
+                    );
+                    let offset = util::unsuffixed(offset as u64);
+                    w_impl_items.push(quote! {
+                        #[doc = #doc]
+                        #[inline(always)]
+                        pub fn #sc_n(&mut self) -> #_pc_w {
+                            #_pc_w { w: self, o: #offset }
+                        }
+                    });
                 }
-            })
+            } else {
+                let doc = description_with_bits(&f.description, f.offset, width);
+                w_impl_items.push(quote! {
+                    #[doc = #doc]
+                    #[inline(always)]
+                    pub fn #sc(&mut self) -> #_pc_w {
+                        #_pc_w { w: self }
+                    }
+                });
+            }
         }
     }
 
@@ -601,6 +710,28 @@ fn unsafety(write_constraint: Option<&WriteConstraint>, width: u32) -> Option<Id
         }
         _ => Some(Ident::new("unsafe", Span::call_site())),
     }
+}
+
+fn calculate_offset(first: u32, increment: u32, offset: u64) -> TokenStream {
+    let mut res = if first != 0 {
+        let first = util::unsuffixed(first as u64);
+        quote! { n - #first }
+    } else {
+        quote! { n }
+    };
+    if increment != 1 {
+        let increment = util::unsuffixed(increment as u64);
+        res = if first != 0 {
+            quote! { (#res) * #increment }
+        } else {
+            quote! { #res * #increment }
+        };
+    }
+    if offset != 0 {
+        let offset = &util::unsuffixed(offset);
+        res = quote! { #res + #offset };
+    }
+    res
 }
 
 struct Variant {
@@ -736,12 +867,24 @@ fn derive_from_base(
     }
 }
 
+fn description_with_bits(description: &str, offset: u64, width: u32) -> String {
+    let mut res = if width == 1 {
+        format!("Bit {}", offset)
+    } else {
+        format!("Bits {}:{}", offset, offset + width as u64 - 1)
+    };
+    if description.len() > 0 {
+        res.push_str(" - ");
+        res.push_str(&util::respace(&util::escape_brackets(description)));
+    }
+    res
+}
+
 struct F<'a> {
     _pc_w: Ident,
     _sc: Ident,
     access: Option<Access>,
     description: String,
-    description_with_bits: String,
     evs: &'a [EnumeratedValues],
     mask: u64,
     name: &'a str,
@@ -754,6 +897,7 @@ struct F<'a> {
     ty: Ident,
     width: u32,
     write_constraint: Option<&'a WriteConstraint>,
+    dim: Option<(u32, u32, u32, Vec<String>)>,
 }
 
 #[derive(Clone, Debug)]
