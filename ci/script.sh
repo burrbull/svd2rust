@@ -35,6 +35,11 @@ test_svd_for_target() {
 }
 
 main() {
+    if [ $VENDOR = rustfmt ]; then
+        cargo fmt --all -- --check
+        return
+    fi
+
     # Ensure that `cargo test` works to avoid surprising people, though it
     # doesn't help with our actual coverage.
     cargo test
